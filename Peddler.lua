@@ -19,6 +19,15 @@ if not IsAddOnLoaded then
   end
 end
 
+-- Best-effort Bagnon presence detector for 1.12 (no IsAddOnLoaded available)
+local function IsBagnonPresent()
+  return (type(_G.Bagnon) ~= 'nil')
+    or (type(_G['BagnonFrameinventory']) ~= 'nil')
+    or (type(_G['BagnonContainerItem1']) ~= 'nil')
+    or (type(_G['BagnonItem1']) ~= 'nil')
+    or (type(_G['BagnonFrameinventoryItem1']) ~= 'nil')
+end
+
 local ARMOUR = Peddler.ARMOUR
 local WEAPON = Peddler.WEAPON
 local WANTED_ITEMS = Peddler.WANTED_ITEMS
@@ -388,6 +397,9 @@ local function showCoinTexture(itemButton)
     -- Baggins/AdiBag update slower than the others, so we have to account for that.
     -- Default WoW bags need to constantly be updating, due to opening of individual bags.
     countLimit = 30
+  elseif IsAddOnLoaded("Bagnon") or IsBagnonPresent() then
+    -- 1.12 Bagnon can update asynchronously; keep a higher limit to ensure overlays appear.
+    countLimit = 30
   else
     countLimit = 5
   end
@@ -424,18 +436,36 @@ local function markBagginsBags()
 end
 
 local function markBagnonBags()
-  for slotNumber = 1, 250 do
-    local itemButton = _G["BagnonContainerItem" .. slotNumber]
-
-    if not itemButton then
-      return
+  local found = false
+  -- Robust scan for 1.12-era Bagnon item buttons; look for any global button whose
+  -- name begins with 'Bagnon' and contains 'Item', with a parent that has a bag ID.
+  for name, frame in pairs(_G) do
+    if type(name) == 'string' and type(frame) == 'table' and frame.GetParent and frame.GetID then
+      if string.find(name, '^Bagnon') and string.find(name, 'Item') then
+        local parent = frame:GetParent()
+        if parent and parent.GetID then
+          local bag = parent:GetID()
+          local slot = frame:GetID()
+          checkItem(bag, slot, frame)
+          found = true
+        end
+      end
     end
+  end
 
-    local itemButtonParent = itemButton:GetParent()
-    if itemButtonParent then
-      local itemsBagNumber = itemButtonParent:GetID()
-      local itemsSlotNumber = itemButton:GetID()
-      checkItem(itemsBagNumber, itemsSlotNumber, itemButton)
+  -- Fallback to a few known sequences if the generic scan found nothing.
+  if not found then
+    for i = 1, 1000 do
+      local btn = _G['BagnonContainerItem' .. i] or _G['BagnonItem' .. i] or _G['BagnonFrameinventoryItem' .. i]
+      if not btn then
+        if i > 100 and not found then break end
+      else
+        local p = btn:GetParent()
+        if p then
+          checkItem(p:GetID(), btn:GetID(), btn)
+          found = true
+        end
+      end
     end
   end
 end
@@ -709,7 +739,7 @@ local function markWares()
     markBagginsBags()
   elseif IsAddOnLoaded("Combuctor")  then
     markCombuctorBags()
-  elseif IsAddOnLoaded("Bagnon") then
+  elseif IsAddOnLoaded("Bagnon") or IsBagnonPresent() then
     markBagnonBags()
   elseif IsAddOnLoaded("OneBag3") then
     markOneBagBags()
@@ -796,6 +826,9 @@ function Peddler.getUniqueItemID(bagNumber, slotNumber)
   return itemID, uniqueItemID, isSoulbound, itemString
 end
 
+-- Forward declare to allow calling inside event handler
+local scheduleBagnonHookRetries
+
 local function handleEvent(self, event, addonName)
   -- Support both modern and 1.12 event calling conventions
   event = event or _G.event
@@ -811,8 +844,10 @@ local function handleEvent(self, event, addonName)
     if IsAddOnLoaded("Baggins") then
       Baggins:RegisterSignal("Baggins_BagOpened", handleBagginsOpened, Baggins)
     end
+    if scheduleBagnonHookRetries then scheduleBagnonHookRetries() end
   elseif event == "PLAYER_ENTERING_WORLD" then
     peddler:RegisterEvent("BAG_UPDATE")
+    if scheduleBagnonHookRetries then scheduleBagnonHookRetries() end
   elseif event == "BAG_UPDATE" then
     After(1, markWares)
   elseif event == "MERCHANT_SHOW" then
@@ -821,6 +856,34 @@ local function handleEvent(self, event, addonName)
 end
 
 peddler:SetScript("OnEvent", handleEvent)
+
+-- Try to hook Bagnon item button click handlers so Peddler's right-click works in Bagnon.
+local hookedBagnonHandlers = {}
+local function tryHookBagnonClicks()
+  -- Only attempt if Bagnon appears present
+  if not (IsAddOnLoaded('Bagnon') or IsBagnonPresent()) then return end
+  local candidates = {
+    'BagnonItem_OnModifiedClick',
+    'BagnonItem_OnClick',
+    'Bagnon_ItemButton_OnClick',
+    'BagnonItemButton_OnClick',
+    'BagnonSlot_OnClick',
+  }
+  for _, fn in ipairs(candidates) do
+    if _G[fn] and not hookedBagnonHandlers[fn] then
+      hooksecurefunc(fn, handleItemClick)
+      hookedBagnonHandlers[fn] = true
+    end
+  end
+end
+
+-- Retry hooking a few times in case Bagnon loads after Peddler
+scheduleBagnonHookRetries = function()
+  local delays = { 0.2, 1, 3, 6 }
+  for _, d in ipairs(delays) do
+    After(d, tryHookBagnonClicks)
+  end
+end
 
 local function toggleItemPeddling(itemID, uniqueItemID, isSoulbound)
   local _, link, quality, _, _, itemType, subType, _, equipSlot, _, price = GetItemInfo(itemID)
