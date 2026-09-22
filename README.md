@@ -1,28 +1,34 @@
-Peddler
-=======
+# Peddler for WoW Forever
 
-WoW addon that allows you to automatically sell any unwanted items, hassle-free!
+This private fork adapts Peddler to WoW Forever's modern UI while keeping the Classic equipment rules. It currently targets WoW Forever `1.60.1` / interface `16001` and is based on upstream Peddler `9.1`.
 
-*ped·dler
-n.
-One who travels about selling wares for a living.*
+Peddler flags unwanted items and automatically sells them the next time you interact with a vendor. Grey items are flagged automatically by default.
 
-##Description
+## Usage
 
-*Peddler* simply allows you to flag items that you plan to sell, automatically selling them later when you interact with a vendor. It automatically flags grey items you loot to be sold, but you're free to un-flag them.
+- **Ctrl + right-click** an inventory item to toggle its sale marker.
+- Open a merchant to sell marked items automatically.
+- Run **`/peddler`** to open the addon options.
 
-While going back to complete low-level quests with regards to getting a few quest achievements, I found my bags full of green quest rewards that I would try to sell whenever I could. However, after leaving a vendor I would notice that I'd missed one or two items; I made this addon so that I could immediately mark the newly received items without having to scour my bags for them later on!
+The options let you change the modifier key, limit each sale to the 12 buyback slots, choose which item qualities are sold automatically, and control chat output.
 
+## Forever compatibility
 
+The fork includes support for:
 
-##Usage
+- Named-color item hyperlinks used by the current Forever client
+- `C_Item.GetItemInfo` in place of the removed global API
+- Pooled Blizzard container buttons and combined bags
+- The current `ContainerFrameItemButtonMixin` modified-click path
+- Current container selling through `C_Container.UseContainerItem`
+- Classic leveling armor and weapon rules
 
-*CTRL+Right-click* on an item in your inventory and it will be flagged for peddling at your next trip to a vendor! A small set of coins appears in the item's icon to highlight that it will be automatically sold.
+## Test
 
-*/peddler displays* the interface's options:
+From the repository root:
 
-*Modifier Key* - allows the user to change the marking modifier from the CTRL-key.
+```powershell
+npx --yes --package fengari-node-cli fengari tests/test_forever.lua
+```
 
-*Sell Limit* - toggles whether or not Peddler should sell items in sets of 12, allowing the user to buyback any mistakenly marked items.
-
-*Silent Mode* - toggles whether or not Peddler will print anything to the chat-log when selling items.
+The regression test covers automatic grey marking, Ctrl-right-click marking, random-suffix item links, the coin overlay, and merchant selling.

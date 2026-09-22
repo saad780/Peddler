@@ -1,6 +1,4 @@
--- Vanilla (1.12) doesn't support top-level varargs; use a global namespace.
-local Peddler = _G.Peddler or {}
-_G.Peddler = Peddler
+local _, Peddler = ...
 
 local ARMOUR = "Armor"
 Peddler.ARMOUR = ARMOUR

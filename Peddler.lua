@@ -1,32 +1,15 @@
--- Vanilla (1.12) doesn't support top-level varargs (`...`).
--- Use a global namespace table that also works in modern clients.
-local Peddler = _G.Peddler or {}
-_G.Peddler = Peddler
+local _, Peddler = ...
 
 -- Assign global functions to locals for optimisation.
 local C_Container = C_Container
-local GetItemInfo = GetItemInfo
+local GetItemInfo = (C_Item and C_Item.GetItemInfo) or GetItemInfo
 local GetQuestLogItemLink = GetQuestLogItemLink
-local PickupMerchantItem = PickupMerchantItem
+local IsAddOnLoaded = (C_AddOns and C_AddOns.IsAddOnLoaded) or IsAddOnLoaded
 local IsControlKeyDown = IsControlKeyDown
 local IsShiftKeyDown = IsShiftKeyDown
 local IsAltKeyDown = IsAltKeyDown
 local UnitClass = UnitClass
 local Baggins = Baggins
-if not IsAddOnLoaded then
-  function IsAddOnLoaded()
-    return false
-  end
-end
-
--- Best-effort Bagnon presence detector for 1.12 (no IsAddOnLoaded available)
-local function IsBagnonPresent()
-  return (type(_G.Bagnon) ~= 'nil')
-    or (type(_G['BagnonFrameinventory']) ~= 'nil')
-    or (type(_G['BagnonContainerItem1']) ~= 'nil')
-    or (type(_G['BagnonItem1']) ~= 'nil')
-    or (type(_G['BagnonFrameinventoryItem1']) ~= 'nil')
-end
 
 local ARMOUR = Peddler.ARMOUR
 local WEAPON = Peddler.WEAPON
@@ -35,114 +18,6 @@ local WANTED_ITEMS = Peddler.WANTED_ITEMS
 local BAG_COUNT = 5
 local BUYBACK_COUNT = 12
 local _, PLAYERS_CLASS = UnitClass('player')
-
--- Lua 5.0 (Vanilla) compatibility helpers
--- print shim for Vanilla
-local print = print or function(msg)
-  if DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.AddMessage then
-    DEFAULT_CHAT_FRAME:AddMessage(tostring(msg))
-  end
-end
-
--- strsplit shim (WoW added strsplit much later)
-local strsplit = strsplit or function(delim, text)
-  local result = {}
-  if not text or text == '' then return unpack(result) end
-  local d = tostring(delim or '')
-  d = string.gsub(d, "(%W)", "%%%1")
-  local pattern = "([^" .. d .. "]+)"
-  local last_end = 1
-  local s, e, cap = string.find(text, pattern, 1)
-  while s do
-    table.insert(result, cap)
-    last_end = e + 1
-    s, e, cap = string.find(text, pattern, last_end)
-  end
-  if last_end <= string.len(text) then
-    table.insert(result, string.sub(text, last_end))
-  end
-  return unpack(result)
-end
-
--- ipairs shim for Lua 5.0 environments
-local ipairs = ipairs or function(t)
-  local i = 0
-  return function()
-    i = i + 1
-    if t[i] ~= nil then return i, t[i] end
-  end
-end
-
--- hooksecurefunc shim for older clients (simple, string-only, two-arg version)
-if not hooksecurefunc then
-  function hooksecurefunc(functionName, hook)
-    local orig = _G[functionName]
-    _G[functionName] = function(a1, a2, a3, a4, a5)
-      if orig then orig(a1, a2, a3, a4, a5) end
-      -- Try to normalize (self, button) for both modern and 1.12 API styles.
-      local selfParam, buttonParam
-      if type(a1) == 'table' then
-        selfParam, buttonParam = a1, a2
-      else
-        selfParam, buttonParam = _G.this, a1
-      end
-      if hook then return hook(selfParam, buttonParam) end
-    end
-  end
-end
-
--- C_Timer.After shim
-local function After(delay, func)
-  if C_Timer and C_Timer.After then
-    return C_Timer.After(delay, func)
-  end
-  -- Fallback: schedule once via OnUpdate (GetTime based for 1.12)
-  local f = CreateFrame('Frame')
-  local start = GetTime and GetTime() or 0
-  f:SetScript('OnUpdate', function()
-    local now = GetTime and GetTime() or 0
-    if (now - start) >= delay then
-      f:SetScript('OnUpdate', nil)
-      func()
-    end
-  end)
-end
-
--- Container API shims for Vanilla
-local function GetContainerNumSlotsCompat(bag)
-  if C_Container and C_Container.GetContainerNumSlots then
-    return C_Container.GetContainerNumSlots(bag)
-  elseif GetContainerNumSlots then
-    return GetContainerNumSlots(bag)
-  else
-    return 0
-  end
-end
-
-local function GetContainerItemLinkCompat(bag, slot)
-  if C_Container and C_Container.GetContainerItemLink then
-    return C_Container.GetContainerItemLink(bag, slot)
-  elseif GetContainerItemLink then
-    return GetContainerItemLink(bag, slot)
-  end
-end
-
-local function GetContainerItemInfoCompat(bag, slot)
-  if C_Container and C_Container.GetContainerItemInfo then
-    return C_Container.GetContainerItemInfo(bag, slot)
-  elseif GetContainerItemInfo then
-    local texture, itemCount, locked, quality, readable, lootable = GetContainerItemInfo(bag, slot)
-    return { stackCount = itemCount, iconFileID = texture, isLocked = locked, quality = quality, isReadable = readable }
-  end
-end
-
-local function PickupContainerItemCompat(bag, slot)
-  if C_Container and C_Container.PickupContainerItem then
-    return C_Container.PickupContainerItem(bag, slot)
-  elseif PickupContainerItem then
-    return PickupContainerItem(bag, slot)
-  end
-end
 
 -- The typical life-cycle of the addon goes as follows:
 --   1. Initially delays for 400ms before attempting to mark wares for the first time.
@@ -154,21 +29,13 @@ end
 --   6. Listen for BagUpdates to refresh the markings (moving an item, etc.).
 --        PS: Baggins needs to also listen to the bags being opened!
 
--- Lua 5.0 does not support the % operator. Provide a safe modulus.
-local function mod(a, b)
-  if math.fmod then return math.fmod(a, b) end
-  if math.mod then return math.mod(a, b) end
-  return a - math.floor(a / b) * b
-end
-
 -- Turns an integer value into the format "Xg Ys Zc".
 local function priceToGold(price)
-  local gold = math.floor(price / 10000)
-  local rem = mod(price, 10000)
-  local silver = math.floor(rem / 100)
-  local copper = mod(rem, 100)
+  local gold = price / 10000
+  local silver = (price % 10000) / 100
+  local copper = (price % 10000) % 100
 
-  return gold .. "|cFFFFCC33g|r " .. silver .. "|cFFC9C9C9s|r " .. copper .. "|cFFCC8890c|r"
+  return math.floor(gold) .. "|cFFFFCC33g|r " .. math.floor(silver) .. "|cFFC9C9C9s|r " .. math.floor(copper) .. "|cFFCC8890c|r"
 end
 
 local peddler = CreateFrame("Frame", nil, UIParent)
@@ -182,31 +49,10 @@ peddler:RegisterEvent("ADDON_LOADED")
 peddler:RegisterEvent("MERCHANT_SHOW")
 
 local function getIsItemSoulbound(bagNumber, slotNumber)
-  -- Modern API path
-  if Item and C_Item and Item.CreateFromBagAndSlot then
-    local item = Item:CreateFromBagAndSlot(bagNumber, slotNumber)
-    local location = item and item:GetItemLocation()
-    if location and C_Item.DoesItemExist(location) then
-      return C_Item.IsBound(location)
-    end
-  end
+  local item = Item:CreateFromBagAndSlot(bagNumber, slotNumber)
+  local location = item:GetItemLocation()
 
-  -- Vanilla fallback: scan tooltip for 'Soulbound'
-  local scanner = _G.PeddlerTooltipScanner or CreateFrame('GameTooltip', 'PeddlerTooltipScanner', UIParent, 'GameTooltipTemplate')
-  _G.PeddlerTooltipScanner = scanner
-  scanner:SetOwner(UIParent, 'ANCHOR_NONE')
-  if scanner.SetBagItem then
-    scanner:ClearLines()
-    scanner:SetBagItem(bagNumber, slotNumber)
-    for i = 1, 8 do
-      local line = _G['PeddlerTooltipScannerTextLeft' .. i]
-      local text = line and line:GetText()
-      if text and (text == (ITEM_SOULBOUND or 'Soulbound') or string.find(text, (ITEM_SOULBOUND or 'Soulbound'))) then
-        return true
-      end
-    end
-  end
-  return false
+  return C_Item.DoesItemExist(location) and C_Item.IsBound(location)
 end
 
 -- Serves to get the item's itemID + suffixID.
@@ -215,7 +61,15 @@ local function parseItemString(itemString)
     return
   end
 
-  local _, itemID, _, _, _, _, _, suffixID = strsplit(":", itemString)
+  -- Modern clients use named-colour prefixes such as
+  -- |cnIQ4:|Hitem:1234:...|h.  Extract the item payload first so parsing is
+  -- independent of the colour format used by a particular client.
+  local itemData = string.match(itemString, "|Hitem:([^|]+)|h") or string.match(itemString, "item:([^|]+)")
+  if not itemData then
+    return
+  end
+
+  local itemID, _, _, _, _, _, suffixID = strsplit(":", itemData)
   itemID = tonumber(itemID)
   suffixID = tonumber(suffixID)
 
@@ -229,6 +83,25 @@ local function parseItemString(itemString)
   end
 
   return itemID, uniqueItemID
+end
+
+local function getUniqueItemID(bagNumber, slotNumber)
+  local itemInfo = C_Container.GetContainerItemInfo(bagNumber, slotNumber)
+  if not itemInfo then
+    return
+  end
+
+  local itemString = C_Container.GetContainerItemLink(bagNumber, slotNumber)
+  local itemID, uniqueItemID = parseItemString(itemString)
+  itemID = itemID or itemInfo.itemID
+  uniqueItemID = uniqueItemID or itemID
+  if not itemID then
+    return
+  end
+
+  local isSoulbound = getIsItemSoulbound(bagNumber, slotNumber)
+
+  return itemID, uniqueItemID, isSoulbound, itemString
 end
 
 local function isUnwantedItem(itemType, subType, equipSlot)
@@ -250,17 +123,11 @@ local function isUnwantedItem(itemType, subType, equipSlot)
 end
 
 function Peddler.itemIsToBeSold(itemID, uniqueItemID, isSoulbound)
-  -- If the user explicitly marked the item, always show as sellable,
-  -- even when item info is not cached yet on 1.12.
-  if ItemsToSell and ItemsToSell[uniqueItemID] then
-    return true
-  end
-
   local _, link, quality, itemLevel, _, itemType, subType, _, equipSlot, _, price = GetItemInfo(itemID)
 
-  -- No price info yet? Defer auto-sell decision, but keep manual marks handled above.
+  -- No price?  No sale!
   if not price or price <= 0 then
-    return false
+    return
   end
 
   local unmarkedItem = UnmarkedItems[uniqueItemID]
@@ -290,19 +157,13 @@ local function peddleGoods()
   local sellDelay = 0
 
   for bagNumber = 0, BAG_COUNT do
-    local bagsSlotCount = GetContainerNumSlotsCompat(bagNumber)
+    local bagsSlotCount = C_Container.GetContainerNumSlots(bagNumber)
     for slotNumber = 1, bagsSlotCount do
-      local itemID, uniqueItemID, isSoulbound, itemLink = Peddler.getUniqueItemID(bagNumber, slotNumber)
+      local itemID, uniqueItemID, isSoulbound, itemLink = getUniqueItemID(bagNumber, slotNumber)
 
       if uniqueItemID and Peddler.itemIsToBeSold(itemID, uniqueItemID, isSoulbound) then
-        local itemButton = _G["ContainerFrame" .. bagNumber + 1 .. "Item" .. bagsSlotCount - slotNumber + 1]
-
-        if itemButton.coins then
-          itemButton.coins:Hide()
-        end
-
-        local itemInfo = GetContainerItemInfoCompat(bagNumber, slotNumber)
-        local amount = (itemInfo and itemInfo.stackCount) or 1
+        local itemInfo = C_Container.GetContainerItemInfo(bagNumber, slotNumber)
+        local amount = itemInfo and itemInfo.stackCount or 1
 
         local _, _, _, _, _, _, _, _, _, _, price = GetItemInfo(itemLink)
 
@@ -328,7 +189,9 @@ local function peddleGoods()
         end
 
         -- Actually sell the item!
-        if (sellDelay > 0) and salesDelay.CreateAnimationGroup then
+        local sellBagNumber = bagNumber
+        local sellSlotNumber = slotNumber
+        if (sellDelay > 0) then
           local waitAnimationGroup = salesDelay:CreateAnimationGroup("sellDelay" .. sellCount)
           local waitAnimation = waitAnimationGroup:CreateAnimation("Translation")
           waitAnimation:SetDuration(sellDelay)
@@ -336,12 +199,10 @@ local function peddleGoods()
           waitAnimationGroup:Play()
 
           waitAnimationGroup:SetScript("OnFinished", function()
-            PickupContainerItemCompat(bagNumber, slotNumber)
-            PickupMerchantItem()
+            C_Container.UseContainerItem(sellBagNumber, sellSlotNumber)
           end)
         else
-          PickupContainerItemCompat(bagNumber, slotNumber)
-          PickupMerchantItem()
+          C_Container.UseContainerItem(sellBagNumber, sellSlotNumber)
         end
 
         sellCount = sellCount + 1
@@ -365,10 +226,8 @@ end
 local function showCoinTexture(itemButton)
   if not itemButton.coins then
     local texture = itemButton:CreateTexture(nil, "OVERLAY")
-    -- 1.12 is more strict; include the file extension and set an explicit size
-    texture:SetTexture("Interface\\AddOns\\Peddler\\coins.tga")
-    texture:SetWidth(14)
-    texture:SetHeight(14)
+    texture:SetTexture("Interface\\AddOns\\Peddler\\coins")
+    texture:SetSize(16, 16)
 
     -- Default padding for making bottom-right look great.
     local paddingX, paddingY = -3, 1
@@ -379,9 +238,7 @@ local function showCoinTexture(itemButton)
       paddingX = 1
     end
 
-    -- 1.12 requires full SetPoint args
-    texture:ClearAllPoints()
-    texture:SetPoint(IconPlacement, itemButton, IconPlacement, paddingX, paddingY)
+    texture:SetPoint(IconPlacement, paddingX, paddingY)
 
     itemButton.coins = texture
   end
@@ -394,11 +251,8 @@ local function showCoinTexture(itemButton)
   markCounter = 0
 
   if usingDefaultBags or IsAddOnLoaded("Baggins") or IsAddOnLoaded("AdiBags") or IsAddOnLoaded("BetterBags") then
-    -- Baggins/AdiBag update slower than the others, so we have to account for that.
+    -- These update slower than the others, so we have to account for that.
     -- Default WoW bags need to constantly be updating, due to opening of individual bags.
-    countLimit = 30
-  elseif IsAddOnLoaded("Bagnon") or IsBagnonPresent() then
-    -- 1.12 Bagnon can update asynchronously; keep a higher limit to ensure overlays appear.
     countLimit = 30
   else
     countLimit = 5
@@ -418,7 +272,7 @@ local function displayCoins(itemID, uniqueItemID, itemButton, isSoulbound)
 end
 
 local function checkItem(bagNumber, slotNumber, itemButton)
-  local itemID, uniqueItemID, isSoulbound = Peddler.getUniqueItemID(bagNumber, slotNumber)
+  local itemID, uniqueItemID, isSoulbound = getUniqueItemID(bagNumber, slotNumber)
   displayCoins(itemID, uniqueItemID, itemButton, isSoulbound)
 end
 
@@ -436,36 +290,18 @@ local function markBagginsBags()
 end
 
 local function markBagnonBags()
-  local found = false
-  -- Robust scan for 1.12-era Bagnon item buttons; look for any global button whose
-  -- name begins with 'Bagnon' and contains 'Item', with a parent that has a bag ID.
-  for name, frame in pairs(_G) do
-    if type(name) == 'string' and type(frame) == 'table' and frame.GetParent and frame.GetID then
-      if string.find(name, '^Bagnon') and string.find(name, 'Item') then
-        local parent = frame:GetParent()
-        if parent and parent.GetID then
-          local bag = parent:GetID()
-          local slot = frame:GetID()
-          checkItem(bag, slot, frame)
-          found = true
-        end
-      end
-    end
-  end
+  for slotNumber = 1, 250 do
+    local itemButton = _G["BagnonContainerItem" .. slotNumber]
 
-  -- Fallback to a few known sequences if the generic scan found nothing.
-  if not found then
-    for i = 1, 1000 do
-      local btn = _G['BagnonContainerItem' .. i] or _G['BagnonItem' .. i] or _G['BagnonFrameinventoryItem' .. i]
-      if not btn then
-        if i > 100 and not found then break end
-      else
-        local p = btn:GetParent()
-        if p then
-          checkItem(p:GetID(), btn:GetID(), btn)
-          found = true
-        end
-      end
+    if not itemButton then
+      return
+    end
+
+    local itemButtonParent = itemButton:GetParent()
+    if itemButtonParent then
+      local itemsBagNumber = itemButtonParent:GetID()
+      local itemsSlotNumber = itemButton:GetID()
+      checkItem(itemsBagNumber, itemsSlotNumber, itemButton)
     end
   end
 end
@@ -487,7 +323,7 @@ end
 
 local function markOneBagBags()
   for bagNumber = 0, BAG_COUNT do
-    local bagsSlotCount = GetContainerNumSlotsCompat(bagNumber)
+    local bagsSlotCount = C_Container.GetContainerNumSlots(bagNumber)
     for slotNumber = 1, bagsSlotCount do
       local itemButton = _G["OneBagFrameBag" .. bagNumber .. "Item" .. bagsSlotCount - slotNumber + 1]
 
@@ -502,7 +338,7 @@ end
 
 local function markBaudBagBags()
   for bagNumber = 0, BAG_COUNT do
-    local bagsSlotCount = GetContainerNumSlotsCompat(bagNumber)
+    local bagsSlotCount = C_Container.GetContainerNumSlots(bagNumber)
     for slotNumber = 1, bagsSlotCount do
       local itemButton = _G["BaudBagSubBag" .. bagNumber .. "Item" .. slotNumber]
       checkItem(bagNumber, slotNumber, itemButton)
@@ -512,7 +348,7 @@ end
 
 local function markBetterBags()
   -- For some reason, BetterBags can have way more buttons than the actual amount of bag slots... not sure how or why.
-  for slotNumber = 1, 1000 do
+  for slotNumber = 1, 2000 do
     local itemButton = _G["BetterBagsItemButton" .. slotNumber]
     if itemButton then
       local itemButtonParent = itemButton:GetParent()
@@ -544,7 +380,7 @@ end
 
 local function markArkInventoryBags()
   for bagNumber = 0, BAG_COUNT do
-    local bagsSlotCount = GetContainerNumSlotsCompat(bagNumber)
+    local bagsSlotCount = C_Container.GetContainerNumSlots(bagNumber)
     for slotNumber = 1, bagsSlotCount do
       local itemButton = _G["ARKINV_Frame1ScrollContainerBag" .. bagNumber + 1 .. "Item" .. slotNumber]
       -- Required to check for itemButton because ArkInventory changed when it builds the item objects so only the first slot of each bag is available prior to the first time its opened, causing Peddler to get a nil obj for itemButton. /vincentSDSH
@@ -556,7 +392,7 @@ end
 local function markCargBagsNivayaBags()
   local totalSlotCount = 0
   for bagNumber = 0, BAG_COUNT do
-    totalSlotCount = totalSlotCount + GetContainerNumSlotsCompat(bagNumber)
+    totalSlotCount = totalSlotCount + C_Container.GetContainerNumSlots(bagNumber)
   end
 
   -- Somehow, Nivaya can have higher slot-numbers than actual bag slots exist...
@@ -580,7 +416,7 @@ end
 local function markMonoBags()
   local totalSlotCount = 0
   for bagNumber = 0, BAG_COUNT do
-    totalSlotCount = totalSlotCount + GetContainerNumSlotsCompat(bagNumber)
+    totalSlotCount = totalSlotCount + C_Container.GetContainerNumSlots(bagNumber)
   end
 
   for slotNumber = 1, totalSlotCount do
@@ -596,7 +432,7 @@ end
 
 local function markDerpyBags()
   for bagNumber = 0, BAG_COUNT do
-    local bagsSlotCount = GetContainerNumSlotsCompat(bagNumber)
+    local bagsSlotCount = C_Container.GetContainerNumSlots(bagNumber)
     for slotNumber = 1, bagsSlotCount do
       local itemButton = _G["StuffingBag" .. bagNumber .. "_" .. slotNumber]
       checkItem(bagNumber, slotNumber, itemButton)
@@ -604,23 +440,12 @@ local function markDerpyBags()
   end
 end
 
--- ElvUI is badly coded, so you'll have to excuse the peculiar code.
 local function markElvUIBags()
-  for bagNumber = 0, BAG_COUNT + 1 do
-    local bagsSlotCount = GetContainerNumSlotsCompat(bagNumber)
+  for bagNumber = 0, BAG_COUNT do
+    local bagsSlotCount = C_Container.GetContainerNumSlots(bagNumber)
     for slotNumber = 1, bagsSlotCount do
-      local containerFrameName = "ElvUI_ContainerFrameBag"
-      local containerFrameBagNumber = bagNumber - 1
-
-      if bagNumber == 0 then
-        containerFrameBagNumber = 1
-        containerFrameName = containerFrameName .. "-"
-      end
-
-      local itemButton = _G[containerFrameName .. containerFrameBagNumber .. "Slot" .. slotNumber]
-      if itemButton then
-        checkItem(bagNumber, slotNumber, itemButton)
-      end
+      local itemButton = _G["ElvUI_ContainerFrameBag" .. bagNumber .. "Slot" .. slotNumber]
+      checkItem(bagNumber, slotNumber, itemButton)
     end
   end
 end
@@ -642,20 +467,22 @@ local function markInventorianBags()
   end
 end
 
--- Special thanks to both Xodiv & Theroxis of Curse for this one.
 local function markLiteBagBags()
-  for i = 1, LiteBagInventoryPanel.size do
-    local button = LiteBagInventoryPanel.itemButtons[i]
-    local itemsBagNumber = button:GetParent():GetID()
-    local itemsSlotNumber = button:GetID()
-    checkItem(itemsBagNumber, itemsSlotNumber, button)
+  for bagNumber = 0, BAG_COUNT do
+    local bagsSlotCount = C_Container.GetContainerNumSlots(bagNumber)
+    for slotNumber = 1, bagsSlotCount do
+      local itemButton = _G["LiteBagBackpackPanelBag" .. bagNumber + 1 .. "Item" .. slotNumber]
+      if itemButton then
+        checkItem(bagNumber, slotNumber, itemButton)
+      end
+    end
   end
 end
 
 -- Special thanks to Tymesink from WowInterface for this one.
 local function markfamBagsBags()
   for bagNumber = 0, BAG_COUNT do
-    local bagsSlotCount = GetContainerNumSlotsCompat(bagNumber)
+    local bagsSlotCount = C_Container.GetContainerNumSlots(bagNumber)
     for slotNumber = 1, bagsSlotCount do
       local itemButton = _G["famBagsButton_" .. bagNumber .. "_" .. slotNumber]
       checkItem(bagNumber, slotNumber, itemButton)
@@ -665,7 +492,7 @@ end
 
 local function markLUIBags()
   for bagNumber = 0, BAG_COUNT do
-    local bagsSlotCount = GetContainerNumSlotsCompat(bagNumber)
+    local bagsSlotCount = C_Container.GetContainerNumSlots(bagNumber)
     for slotNumber = 1, bagsSlotCount do
       local itemButton = _G["LUIBags_Item" .. bagNumber .. "_" .. slotNumber]
       checkItem(bagNumber, slotNumber, itemButton)
@@ -676,7 +503,7 @@ end
 local function markRealUIBags()
   local totalSlotCount = 0
   for bagNumber = 0, BAG_COUNT do
-    totalSlotCount = totalSlotCount + GetContainerNumSlotsCompat(bagNumber)
+    totalSlotCount = totalSlotCount + C_Container.GetContainerNumSlots(bagNumber)
   end
 
   -- Somehow, this can have higher slot-numbers than actual bag slots exist...
@@ -697,35 +524,26 @@ local function markRealUIBags()
   end
 end
 
--- Also works for bBag.
-local function markNormalBags()
-  for containerNumber = 0, BAG_COUNT do
-    local container = _G["ContainerFrame" .. containerNumber + 1]
-    local combinedBags = _G["ContainerFrameCombinedBags"]
-    if (container:IsShown()) then
-      local bagsSlotCount = GetContainerNumSlotsCompat(containerNumber)
-      for slotNumber = 1, bagsSlotCount do
-        -- It appears there are two ways of finding items!
-        --   Accessing via _G means that bagNumbers are 1-based indices and
-        --   slot numbers start from the bottom-right rather than top-left!
-        -- Additionally, as only a couple of the bags may be visible at any
-        --   given time, we may be looking at items whose buttons don't
-        --   currently exist, and mark the wrong ones, so get the actual
-        --   bag & slot number from the itemButton.
-        local itemButton = _G["ContainerFrame" .. containerNumber + 1 .. "Item" .. bagsSlotCount - slotNumber + 1]
+local function markBaganatorBags()
+  local singleView = _G["Baganator_SingleViewBackpackViewFrame"]
+  local categoryView = _G["Baganator_CategoryViewBackpackViewFrame"]
 
-        local bagNumber = itemButton:GetParent():GetID()
-        local actualSlotNumber = itemButton:GetID()
-
-        checkItem(bagNumber, actualSlotNumber, itemButton)
+  local bags = singleView:IsShown() and singleView or categoryView
+    for i, layout in ipairs(bags.Container.Layouts) do
+      for j, itemButton in ipairs(layout.buttons) do
+        local slotNumber, containerNumber = itemButton:GetSlotAndBagID()
+        checkItem(containerNumber, slotNumber, itemButton)
       end
-    elseif (combinedBags and combinedBags:IsShown()) then
-      local bagsSlotCount = GetContainerNumSlotsCompat(containerNumber)
-      for slotNumber = 1, bagsSlotCount do
-        local itemButton = _G["ContainerFrame" .. containerNumber + 1 .. "Item" .. bagsSlotCount - slotNumber + 1]
-        local actualSlotNumber = itemButton:GetID()
+    end
+end
 
-        checkItem(containerNumber, actualSlotNumber, itemButton)
+local function markNormalBags()
+  -- WoW Forever uses pooled item buttons.  Enumerate the live containers
+  -- rather than relying on the old ContainerFrame#Item# global names.
+  for _, container in ContainerFrameUtil_EnumerateContainerFrames() do
+    if container:IsShown() then
+      for _, itemButton in container:EnumerateValidItems() do
+        checkItem(itemButton:GetBagID(), itemButton:GetID(), itemButton)
       end
     end
   end
@@ -737,9 +555,9 @@ local overridenItemClickFunction = false
 local function markWares()
   if IsAddOnLoaded("Baggins") then
     markBagginsBags()
-  elseif IsAddOnLoaded("Combuctor")  then
+  elseif IsAddOnLoaded("Combuctor") then
     markCombuctorBags()
-  elseif IsAddOnLoaded("Bagnon") or IsBagnonPresent() then
+  elseif IsAddOnLoaded("Bagnon") then
     markBagnonBags()
   elseif IsAddOnLoaded("OneBag3") then
     markOneBagBags()
@@ -747,6 +565,8 @@ local function markWares()
     markBaudBagBags()
   elseif IsAddOnLoaded("AdiBags") then
     markAdiBagBags()
+  elseif IsAddOnLoaded("BetterBags") then
+    markBetterBags()
   elseif IsAddOnLoaded("ArkInventory") then
     markArkInventoryBags()
   elseif IsAddOnLoaded("famBags") then
@@ -767,8 +587,8 @@ local function markWares()
     markLUIBags()
   elseif IsAddOnLoaded("RealUI_Inventory") then
     markRealUIBags()
-  elseif IsAddOnLoaded("BetterBags") then
-    markBetterBags()
+  elseif IsAddOnLoaded("Baganator") then
+    markBaganatorBags()
   else
     usingDefaultBags = true
     markNormalBags()
@@ -816,74 +636,46 @@ local function setupDefaults()
   end
 end
 
-function Peddler.getUniqueItemID(bagNumber, slotNumber)
-	if bagNumber == nil then return end
-
-  local itemString = GetContainerItemLinkCompat(bagNumber, slotNumber)
-  local itemID, uniqueItemID = parseItemString(itemString)
-  local isSoulbound = getIsItemSoulbound(bagNumber, slotNumber)
-
-  return itemID, uniqueItemID, isSoulbound, itemString
+local function overrideItemClickFunction()
+  if ContainerFrameItemButtonMixin and type(ContainerFrameItemButtonMixin.OnModifiedClick) == "function" then
+    hooksecurefunc(ContainerFrameItemButtonMixin, "OnModifiedClick", function(itemButton, mouseButton)
+      local item = ItemLocation:CreateFromBagAndSlot(itemButton:GetBagID(), itemButton:GetID())
+      handlePeddlerItemClick(itemButton, item, mouseButton)
+    end)
+  else
+    -- Compatibility path for clients and bag addons that route modified
+    -- clicks through the global handler.
+    hooksecurefunc("HandleModifiedItemClick", function(link, item)
+      if item then
+        handlePeddlerItemClick(link, item)
+      end
+    end)
+  end
 end
 
--- Forward declare to allow calling inside event handler
-local scheduleBagnonHookRetries
-
 local function handleEvent(self, event, addonName)
-  -- Support both modern and 1.12 event calling conventions
-  event = event or _G.event
-  addonName = addonName or _G.arg1
   if event == "ADDON_LOADED" and addonName == "Peddler" then
     peddler:UnregisterEvent("ADDON_LOADED")
 
     setupDefaults()
+    overrideItemClickFunction()
 
-    countLimit = 400
+    countLimit = 30
     peddler:SetScript("OnUpdate", onUpdate)
 
     if IsAddOnLoaded("Baggins") then
       Baggins:RegisterSignal("Baggins_BagOpened", handleBagginsOpened, Baggins)
     end
-    if scheduleBagnonHookRetries then scheduleBagnonHookRetries() end
   elseif event == "PLAYER_ENTERING_WORLD" then
     peddler:RegisterEvent("BAG_UPDATE")
-    if scheduleBagnonHookRetries then scheduleBagnonHookRetries() end
   elseif event == "BAG_UPDATE" then
-    After(1, markWares)
+    C_Timer.After(1, markWares)
   elseif event == "MERCHANT_SHOW" then
     peddleGoods()
   end
 end
 
 peddler:SetScript("OnEvent", handleEvent)
-
--- Try to hook Bagnon item button click handlers so Peddler's right-click works in Bagnon.
-local hookedBagnonHandlers = {}
-local function tryHookBagnonClicks()
-  -- Only attempt if Bagnon appears present
-  if not (IsAddOnLoaded('Bagnon') or IsBagnonPresent()) then return end
-  local candidates = {
-    'BagnonItem_OnModifiedClick',
-    'BagnonItem_OnClick',
-    'Bagnon_ItemButton_OnClick',
-    'BagnonItemButton_OnClick',
-    'BagnonSlot_OnClick',
-  }
-  for _, fn in ipairs(candidates) do
-    if _G[fn] and not hookedBagnonHandlers[fn] then
-      hooksecurefunc(fn, handleItemClick)
-      hookedBagnonHandlers[fn] = true
-    end
-  end
-end
-
--- Retry hooking a few times in case Bagnon loads after Peddler
-scheduleBagnonHookRetries = function()
-  local delays = { 0.2, 1, 3, 6 }
-  for _, d in ipairs(delays) do
-    After(d, tryHookBagnonClicks)
-  end
-end
 
 local function toggleItemPeddling(itemID, uniqueItemID, isSoulbound)
   local _, link, quality, _, _, itemType, subType, _, equipSlot, _, price = GetItemInfo(itemID)
@@ -921,37 +713,37 @@ local function toggleItemPeddling(itemID, uniqueItemID, isSoulbound)
   end
 end
 
-local function handleItemClick(self, button)
-	local ctrlKeyDown = IsControlKeyDown()
-	local shiftKeyDown = IsShiftKeyDown()
-	local altKeyDown = IsAltKeyDown()
+function clickedWithPeddlerCombo(mouseButton)
+  local ctrlKeyDown = IsControlKeyDown()
+  local shiftKeyDown = IsShiftKeyDown()
+  local altKeyDown = IsAltKeyDown()
+  local mouseButtonPressed = mouseButton or GetMouseButtonClicked()
 
-	local modifierDown = (ModifierKey == 'CTRL' and ctrlKeyDown or (ModifierKey == 'SHIFT' and shiftKeyDown or (ModifierKey == 'ALT' and altKeyDown or (ModifierKey == 'CTRL-SHIFT' and ctrlKeyDown and shiftKeyDown or (ModifierKey == 'CTRL-ALT' and ctrlKeyDown and altKeyDown or (ModifierKey == 'ALT-SHIFT' and altKeyDown and shiftKeyDown))))))
-	local usingPeddler = (modifierDown and button == 'RightButton')
-	if not usingPeddler then
-		return
-	end
+  local modifierDown = (ModifierKey == 'CTRL' and ctrlKeyDown or (ModifierKey == 'SHIFT' and shiftKeyDown or (ModifierKey == 'ALT' and altKeyDown or (ModifierKey == 'CTRL-SHIFT' and ctrlKeyDown and shiftKeyDown or (ModifierKey == 'CTRL-ALT' and ctrlKeyDown and altKeyDown or (ModifierKey == 'ALT-SHIFT' and altKeyDown and shiftKeyDown))))))
+  local usingPeddler = (modifierDown and mouseButtonPressed == 'RightButton')
 
-	local bagNumber = self:GetParent():GetID()
-	local slotNumber = self:GetID()
-
-	local itemID, uniqueItemID, isSoulbound = Peddler.getUniqueItemID(bagNumber, slotNumber)
-
-	-- Empty bag slots cannot be sold, silly!
-	if not itemID then
-		return
-	end
-
-	toggleItemPeddling(itemID, uniqueItemID, isSoulbound)
-
-	markWares()
+  return usingPeddler
 end
 
-hooksecurefunc("ContainerFrameItemButton_OnModifiedClick", handleItemClick)
-hooksecurefunc("ContainerFrameItemButton_OnClick", handleItemClick)
+function handlePeddlerItemClick(self, item, mouseButton)
+  if not clickedWithPeddlerCombo(mouseButton) then
+    return
+  end
+
+  local bagNumber, slotNumber = item:GetBagAndSlot()
+  local itemID, uniqueItemID, isSoulbound = getUniqueItemID(bagNumber, slotNumber)
+
+  -- Empty bag slots cannot be sold, silly!
+  if not itemID then
+    return
+  end
+
+  toggleItemPeddling(itemID, uniqueItemID, isSoulbound)
+
+  markWares()
+end
 
 -- Quest Reward handling.
---[[ 
 local listeningToRewards = {}
 local function checkQuestReward(itemButton, toggle)
   local rewardIndex = itemButton:GetID()
@@ -1008,7 +800,4 @@ local function onMapQuestRewardsShow()
 end
 
 MapQuestInfoRewardsFrame:HookScript("OnShow", onMapQuestRewardsShow)
-QuestInfoRewardsFrame:HookScript("OnShow", onQuestRewardsShow) 
-]]
-
-PeddlerAPI = Peddler
+QuestInfoRewardsFrame:HookScript("OnShow", onQuestRewardsShow)
