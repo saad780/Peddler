@@ -2,6 +2,7 @@
 ## Title: Peddler - WoW Forever
 ## Notes: Automatically sells previously designated items!
 ## Author: Cartas @ Bloodfang-Classic
+## X-Forever-Compatibility: saad780 (small compatibility edits)
 ## Version: 9.1-forever.2
 ## SavedVariables: ModifierKey, SellLimit, Silent, SilenceSaleSummary, IconPlacement
 ## SavedVariablesPerCharacter: ItemsToSell, UnmarkedItems, AutoSellGreyItems, AutoSellWhiteItems, AutoSellGreenItems, AutoSellBlueItems, AutoSellPurpleItems, AutoSellUnwantedItems, SoulboundOnly

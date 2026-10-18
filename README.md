@@ -1,6 +1,14 @@
 # Peddler for WoW Forever
 
-This private fork adapts Peddler to WoW Forever's modern UI while keeping the Classic equipment rules. It currently targets WoW Forever `1.60.1` / interface `16001` and is based on upstream Peddler `9.1`.
+This is a compatibility fork of **[Peddler by Cartas](https://github.com/Cartas/Peddler)**, based on upstream Peddler `9.1`. It contains small edits to make the existing addon work on WoW Forever `1.60.1` / interface `16001`, while keeping the Classic equipment rules.
+
+## Credits
+
+- **Original addon author: [Cartas](https://github.com/Cartas)** (credited in the addon as Cartas @ Bloodfang-Classic).
+- **Upstream contributors:** [Pierre-Sassoulas](https://github.com/Pierre-Sassoulas), [steino](https://github.com/steino), and [mandmyay1](https://github.com/mandmyay1). See the [upstream contributor history](https://github.com/Cartas/Peddler/graphs/contributors).
+- **Small WoW Forever compatibility edits and regression tests:** [saad780](https://github.com/saad780). This fork does not claim authorship of the original addon.
+
+The original code and included artwork come from upstream Peddler. The [original CurseForge project](https://www.curseforge.com/wow/addons/peddler), maintained by Cartas, lists its license as **Public Domain**.
 
 Peddler flags unwanted items and automatically sells them the next time you interact with a vendor. Grey items are flagged automatically by default.
 
