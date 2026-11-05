@@ -30,6 +30,7 @@ The fork includes support for:
 - The current `ContainerFrameItemButtonMixin` modified-click path
 - Current container selling through `C_Container.UseContainerItem`
 - Classic leveling armor and weapon rules
+- Baganator's grouped views and live item buttons, with safe startup and view-switch handling
 
 ## Test
 
@@ -39,4 +40,4 @@ From the repository root:
 npx --yes --package fengari-node-cli fengari tests/test_forever.lua
 ```
 
-The regression test covers automatic grey marking, Ctrl-right-click marking, random-suffix item links, the coin overlay, and merchant selling.
+The regression test covers automatic grey marking, Ctrl-right-click marking, random-suffix item links, the coin overlay, merchant selling, and Baganator startup, grouped views, cached characters, and view switching.

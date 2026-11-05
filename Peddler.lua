@@ -525,16 +525,46 @@ local function markRealUIBags()
 end
 
 local function markBaganatorBags()
-  local singleView = _G["Baganator_SingleViewBackpackViewFrame"]
-  local categoryView = _G["Baganator_CategoryViewBackpackViewFrame"]
+  local function markButton(itemButton)
+    if not itemButton or (itemButton.IsVisible and not itemButton:IsVisible()) then
+      return
+    end
+    local slotNumber, containerNumber
+    if type(itemButton.GetSlotAndBagID) == "function" then
+      slotNumber, containerNumber = itemButton:GetSlotAndBagID()
+    elseif type(itemButton.GetBagID) == "function" and type(itemButton.GetID) == "function" then
+      containerNumber, slotNumber = itemButton:GetBagID(), itemButton:GetID()
+    end
+    -- Cached characters and bank/guild-bank buttons aren't live backpack slots.
+    if type(containerNumber) == "number" and containerNumber >= 0 and containerNumber <= BAG_COUNT
+        and type(slotNumber) == "number" and slotNumber > 0 then
+      checkItem(containerNumber, slotNumber, itemButton)
+    end
+  end
 
-  local bags = singleView:IsShown() and singleView or categoryView
-    for i, layout in ipairs(bags.Container.Layouts) do
-      for j, itemButton in ipairs(layout.buttons) do
-        local slotNumber, containerNumber = itemButton:GetSlotAndBagID()
-        checkItem(containerNumber, slotNumber, itemButton)
+  -- Current Baganator uses named frame groups and separate live/cached layouts.
+  -- Its public registry avoids assumptions about frame names and active skins.
+  local skins = Baganator and Baganator.API and Baganator.API.Skins
+  if skins and type(skins.GetAllFrames) == "function" then
+    for _, details in ipairs(skins.GetAllFrames() or {}) do
+      if details.regionType == "ItemButton" then
+        markButton(details.region)
       end
     end
+    return
+  end
+
+  -- Compatibility for older versions; either view can be absent during startup.
+  for _, name in ipairs({"Baganator_SingleViewBackpackViewFrame", "Baganator_CategoryViewBackpackViewFrame"}) do
+    local bags = _G[name]
+    if bags and bags:IsShown() and bags.isLive ~= false and bags.Container then
+      for _, layout in ipairs(bags.Container.Layouts or {}) do
+        for _, itemButton in ipairs(layout.buttons or {}) do
+          markButton(itemButton)
+        end
+      end
+    end
+  end
 end
 
 local function markNormalBags()
@@ -665,6 +695,13 @@ local function handleEvent(self, event, addonName)
 
     if IsAddOnLoaded("Baggins") then
       Baggins:RegisterSignal("Baggins_BagOpened", handleBagginsOpened, Baggins)
+    end
+    if IsAddOnLoaded("Baganator") and Baganator and Baganator.CallbackRegistry then
+      local function refreshBaganator()
+        C_Timer.After(0, markWares)
+      end
+      Baganator.CallbackRegistry:RegisterCallback("BagShow", refreshBaganator, peddler)
+      Baganator.CallbackRegistry:RegisterCallback("BackpackFrameChanged", refreshBaganator, peddler)
     end
   elseif event == "PLAYER_ENTERING_WORLD" then
     peddler:RegisterEvent("BAG_UPDATE")
